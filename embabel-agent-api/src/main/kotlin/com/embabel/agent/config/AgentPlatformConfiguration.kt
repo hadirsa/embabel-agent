@@ -119,7 +119,7 @@ internal class AgentPlatformConfiguration(
      * might create get injected here
      */
     @Bean
-    @DependsOn("ollamaModels", "dockerLocalModels")
+    @DependsOn("ollamaModels", "dockerLocalModels","geminiModels")
     fun modelProvider(
         llms: List<Llm>,
         embeddingServices: List<EmbeddingService>,

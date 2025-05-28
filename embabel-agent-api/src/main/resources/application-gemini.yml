@@ -1,0 +1,32 @@
+spring:
+  ai:
+    vertex:
+      ai:
+        gemini:
+          project-id: #project_id from gcloud
+          location: us-central1 # default location
+          credentials-uri: #service account key .json file
+          models:
+            - name: gemini-1.5-pro-preview-0409
+              knowledge-cutoff: 2024-04-09
+              input-price: 1.0
+              output-price: 2.0
+            - name: gemini-2.0-flash
+              knowledge-cutoff: 2024-06-01
+              input-price: 0.5
+              output-price: 1.0
+
+embabel:
+  models:
+    default-llm: gemini-1.5-pro-preview-0409
+    default-embedding-model: gemini-2.0-flash
+    embedding-services:
+      best: gemini-2.0-flash
+      cheapest: gemini-2.0-flash
+    llms:
+      best: gemini-1.5-pro-preview-0409
+      cheapest: gemini-2.0-flash
+
+  agent-platform:
+    ranking:
+      llm: gemini-1.5-pro-preview-0409
