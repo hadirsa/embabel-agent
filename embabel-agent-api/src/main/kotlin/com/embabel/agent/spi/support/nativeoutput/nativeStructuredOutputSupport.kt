@@ -25,16 +25,24 @@ import com.embabel.common.ai.converters.propertiesNode
 import com.embabel.common.ai.converters.requiredFieldNames
 import com.embabel.common.ai.converters.schemaType
 import com.embabel.common.ai.model.NativeStructuredOutputMode
+import org.slf4j.LoggerFactory
 import tools.jackson.databind.JsonNode
+
+private val logger = LoggerFactory.getLogger("com.embabel.agent.spi.support.nativeoutput")
 
 /**
  * Provider-neutral policy for deciding whether native structured output should be used.
  *
- * The decision is intentionally conservative:
- * 1. the provider must advertise support
- * 2. the request must carry native structured-output metadata
- * 3. the caller must not disable native output explicitly
+ * The decision is intentionally conservative for DEFAULT mode:
+ * 1. the model's metadata must declare native structured output as supported
+ *    (`NativeSupport.structuredOutput.supported == true`); models that do not
+ *    declare it are skipped even if the caller explicitly requests it
+ * 2. the request must carry a [NativeStructuredOutputRequest] — i.e. the caller opted in via
+ *    [withNativeStructuredOutput] or equivalent
+ * 3. the caller must not disable native output explicitly ([NativeStructuredOutputMode.DISABLED])
  * 4. the schema must fit the conservative native-output shape policy
+ *    ([NativeStructuredOutputMode.DEFAULT] only; [NativeStructuredOutputMode.ENABLED] bypasses this check;
+ *    incompatible schemas in DEFAULT mode log at DEBUG level and fall back to prompt-based extraction)
  *
  * This helper intentionally does not encode provider-specific payload rules such as
  * OpenAI `response_format` details or DeepSeek/OpenAI-compatible transport quirks.
@@ -50,9 +58,18 @@ internal fun NativeSupport?.shouldUseNativeStructuredOutput(request: LlmMessageR
     val mode = nativeStructuredOutputRequest.nativeStructuredOutputMode
     return when (mode) {
         NativeStructuredOutputMode.DISABLED -> false
-        NativeStructuredOutputMode.ENABLED,
-        NativeStructuredOutputMode.DEFAULT ->
-            nativeStructuredOutputRequest.structuredOutputRequest.schema.isConservativelyCompatibleWithNativeOutput()
+        NativeStructuredOutputMode.ENABLED -> true
+        NativeStructuredOutputMode.DEFAULT -> {
+            val compatible = nativeStructuredOutputRequest.structuredOutputRequest.schema
+                .isConservativelyCompatibleWithNativeOutput()
+            if (!compatible) {
+                logger.debug(
+                    "Native structured output not used: schema is not compatible with native output; using prompt-based extraction. " +
+                        "Use NativeStructuredOutputMode.ENABLED to force native output, or DISABLED to silence this log."
+                )
+            }
+            compatible
+        }
     }
 }
 
@@ -76,11 +93,11 @@ private fun JsonNode.isConservativelyCompatibleWithNativeOutput(): Boolean {
     }
 
     val properties = propertiesNode()
-    if (schemaType() == null && properties == null) {
+    if (properties == null) {
         return false
     }
 
-    if (properties != null && !hasCompatibleObjectProperties(properties)) {
+    if (!hasCompatibleObjectProperties(properties)) {
         return false
     }
 
@@ -107,6 +124,10 @@ private fun JsonNode.isConservativelyCompatibleSchemaNode(): Boolean {
         return false
     }
 
+    if (get("type")?.isArray == true) {
+        return isValidNullableUnion()
+    }
+
     return when (schemaType()) {
         null -> true
         "object" -> isConservativelyCompatibleWithNativeOutput()
@@ -120,15 +141,37 @@ private fun JsonNode.isConservativelyCompatibleSchemaNode(): Boolean {
     }
 }
 
+// Validates a nullable union type — the JSON Schema form of Optional<T> / T?:
+//   { "type": ["string", "null"] }                              ← scalar nullable
+//   { "type": ["object", "null"], "properties": {...} }         ← nullable object
+private fun JsonNode.isValidNullableUnion(): Boolean {
+    // "type" must be an array — ["<baseType>", "null"]
+    val typeNode = get("type") ?: return false
+    if (typeNode.size() != 2) return false
+    // collect text values, discarding any non-text nodes (defensive — schema nodes are always text)
+    val types = typeNode.mapNotNull { if (it.isString) it.asString() else null }.toSet()
+    if ("null" !in types) return false
+    val nonNull = types.singleOrNull { it != "null" } ?: return false
+    return when (nonNull) {
+        "string", "integer", "number", "boolean" -> true
+        "object" -> isConservativelyCompatibleWithNativeOutput()
+        else -> false
+    }
+}
+
 private fun JsonNode.isConservativelyCompatibleArray(): Boolean {
     val items = itemsNode() ?: return false
     if (!items.isObject || items.hasUnsupportedJsonSchemaKeywords()) {
         return false
     }
 
+    if (items.get("type")?.isArray == true) {
+        return items.isValidNullableUnion()
+    }
+
     val itemType = items.schemaType()
     if (itemType == "object" || items.propertiesNode() != null) {
-        return false
+        return items.isConservativelyCompatibleWithNativeOutput()
     }
     if (itemType == "array" || items.itemsNode() != null) {
         return false

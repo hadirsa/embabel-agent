@@ -89,6 +89,12 @@ class JacksonOutputConverterTest {
         val optional: String?,
     )
 
+    // Kotlin T? emits scalar "type":"object" — NOT a union type
+    data class KotlinNullableChildParent(
+        val requiredName: String,
+        val optionalChild: KotlinRequiredChild?,
+    )
+
     @Nested
     inner class SchemaNormalizationTests {
 
@@ -130,6 +136,34 @@ class JacksonOutputConverterTest {
         }
 
         @Test
+        fun `normalizes required fields inside Kotlin nullable child without crashing`() {
+            val converter = JacksonOutputConverter(KotlinNullableChildParent::class.java, objectMapper)
+            val schema = jacksonObjectMapper().readTree(converter.getJsonSchema())
+
+            // requiredName is non-null → required; optionalChild is Kotlin T? → not required
+            assertThat(schema.requiredFieldNames()).containsExactlyInAnyOrder("requiredName")
+        }
+
+        @Test
+        fun `normalizes required fields inside Java Optional child — Java path`() {
+            @Suppress("UNCHECKED_CAST")
+            val javaClass = Class.forName(
+                "com.embabel.common.ai.converters.JavaStructuredOutputFixtures\$ParentWithOptionalChild"
+            ) as Class<Any>
+            val converter = JacksonOutputConverter(javaClass, objectMapper)
+            val schema = jacksonObjectMapper().readTree(converter.getJsonSchema())
+
+            // optionalChild is Optional<Child> — not marked @JsonProperty(required) → not in outer required
+            assertThat(schema.requiredFieldNames()).containsExactlyInAnyOrder("requiredName")
+
+            // Optional<Child> produces a nullable union schema; after unwrapping Optional in
+            // resolveJavaSchemaPropertyMetadata, normalizeRequiredFields recurses into Child
+            // and marks count (primitive) as required
+            val optionalChildSchema = schema.path("properties").path("optionalChild")
+            assertThat(optionalChildSchema.requiredFieldNames()).containsExactlyInAnyOrder("count")
+        }
+
+        @Test
         fun `marks Java primitives and annotations as required while leaving plain references optional`() {
             val javaType = Class.forName("com.embabel.common.ai.converters.JavaStructuredOutputFixtures\$Parent")
                 as Class<Any>
@@ -140,8 +174,14 @@ class JacksonOutputConverterTest {
                 "primitiveCount",
                 "explicitRequired",
                 "validatedRequired",
+                "optionalNickname",
             )
             assertThat(schema.path("properties").path("optionalText").requiredFieldNames()).isEmpty()
+            // Optional<String> with @JsonProperty(required=true) must produce ["string","null"] union type
+            val nicknameType = schema.path("properties").path("optionalNickname").path("type")
+            assertThat(nicknameType.isArray).isTrue()
+            val nicknameTypes = (0 until nicknameType.size()).map { nicknameType.get(it).asText() }
+            assertThat(nicknameTypes).contains("string", "null")
             assertThat(schema.path("properties").path("child").requiredFieldNamesOrRefResolved(schema))
                 .containsExactlyInAnyOrder("count")
         }

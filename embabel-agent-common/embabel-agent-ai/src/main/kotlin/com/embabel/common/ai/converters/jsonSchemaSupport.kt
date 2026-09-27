@@ -16,6 +16,7 @@
 package com.embabel.common.ai.converters
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import org.slf4j.LoggerFactory
 import tools.jackson.databind.JavaType
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
@@ -28,6 +29,8 @@ import java.lang.reflect.Modifier
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.Metadata
 import kotlin.reflect.full.memberProperties
+
+private val logger = LoggerFactory.getLogger("com.embabel.common.ai.converters.jsonSchemaSupport")
 
 private val jsonSchemaObjectMapper = JsonMapper.builder().build()
 
@@ -60,7 +63,7 @@ fun parseJsonSchema(schema: String): JsonNode? =
 /**
  * Return the schema `type` value if present.
  */
-fun JsonNode.schemaType(): String? = get("type")?.asString()
+fun JsonNode.schemaType(): String? = get("type")?.let { if (it.isArray) null else it.asString() }
 
 /**
  * Return the `properties` node if present.
@@ -102,6 +105,7 @@ fun JsonNode.normalizeRequiredFields(type: java.lang.reflect.Type, objectMapper:
     apply {
         val javaType = objectMapper.typeFactory.constructType(type)
         normalizeRequiredFields(this, javaType, objectMapper, this)
+        logger.debug("Normalized schema for {}: {}", type.typeName, this)
     }
 
 /**
@@ -260,7 +264,9 @@ private fun BeanPropertyDefinition.toSchemaPropertyMetadata(
 
     return SchemaPropertyMetadata(
         required = required,
-        childType = primaryMember?.type,
+        childType = primaryMember?.type?.let { type ->
+            if (type.isReferenceType) type.referencedType ?: type.containedType(0) else type
+        },
     )
 }
 
@@ -269,9 +275,10 @@ private fun Field.toSchemaPropertyMetadata(objectMapper: ObjectMapper): SchemaPr
         getAnnotation(JsonProperty::class.java)?.required == true ||
         isAnnotationPresent(NotNull::class.java)
 
+    val javaType = objectMapper.typeFactory.constructType(genericType)
     return SchemaPropertyMetadata(
         required = required,
-        childType = objectMapper.typeFactory.constructType(genericType),
+        childType = if (javaType.isReferenceType) javaType.referencedType ?: javaType.containedType(0) else javaType,
     )
 }
 

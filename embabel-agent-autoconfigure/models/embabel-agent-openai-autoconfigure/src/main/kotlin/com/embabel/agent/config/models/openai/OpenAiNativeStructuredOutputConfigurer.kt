@@ -19,6 +19,7 @@ import com.embabel.agent.spi.loop.StructuredOutputRequest
 import com.embabel.agent.spi.support.springai.SpringAiNativeStructuredOutputConfigurer
 import com.embabel.common.ai.autoconfig.NativeSupport
 import com.embabel.common.ai.model.LlmMetadata
+import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.prompt.ChatOptions
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat
 import org.springframework.ai.openai.OpenAiChatOptions
@@ -35,6 +36,8 @@ import org.springframework.ai.openai.OpenAiChatOptions
  * the source of truth for direct payload injection.
  */
 internal object OpenAiNativeStructuredOutputConfigurer : SpringAiNativeStructuredOutputConfigurer {
+
+    private val logger = LoggerFactory.getLogger(OpenAiNativeStructuredOutputConfigurer::class.java)
 
     @Suppress("UNUSED_PARAMETER")
     override fun configure(
@@ -57,11 +60,13 @@ internal object OpenAiNativeStructuredOutputConfigurer : SpringAiNativeStructure
         val responseFormat = ResponseFormat.builder()
             .type(ResponseFormat.Type.JSON_SCHEMA)
             .jsonSchema(structuredOutput.schema)
+            .strict(structuredOutput.strict)
             .build()
+
+        logger.debug("Applying OpenAI response_format: strict={} schema={}", structuredOutput.strict, structuredOutput.schema)
 
         return options.mutate()
             .responseFormat(responseFormat)
-            .outputSchema(structuredOutput.schema)
             .build()
     }
 }

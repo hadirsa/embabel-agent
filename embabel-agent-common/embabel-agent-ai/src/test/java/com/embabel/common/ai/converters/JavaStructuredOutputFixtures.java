@@ -19,6 +19,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotNull;
 
 import java.util.List;
+import java.util.Optional;
 
 public class JavaStructuredOutputFixtures {
 
@@ -38,8 +39,19 @@ public class JavaStructuredOutputFixtures {
 
         public String optionalText;
 
+        @JsonProperty(required = true)
+        public Optional<String> optionalNickname;
+
         public Child child;
 
         public List<Child> children;
+    }
+
+    /** Tests that Optional<Child> unwraps correctly so Child's required fields are normalized. */
+    public static class ParentWithOptionalChild {
+        @JsonProperty(required = true)
+        public String requiredName;
+
+        public Optional<Child> optionalChild;
     }
 }

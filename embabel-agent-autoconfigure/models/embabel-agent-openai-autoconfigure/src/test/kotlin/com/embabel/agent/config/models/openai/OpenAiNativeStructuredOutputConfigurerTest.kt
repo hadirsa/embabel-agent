@@ -67,7 +67,32 @@ class OpenAiNativeStructuredOutputConfigurerTest {
             val configuredOptions = configured as OpenAiChatOptions
             assertThat(configuredOptions.responseFormat?.type).isEqualTo(ResponseFormat.Type.JSON_SCHEMA)
             assertThat(configuredOptions.responseFormat?.jsonSchema).isEqualTo(request.schema)
-            assertThat(configuredOptions.outputSchema).isEqualTo(request.schema)
+            // strict must be carried by ResponseFormat (read by OpenAiChatModel.createRequest),
+            // not by options.strict (never read by createRequest for response_format)
+            assertThat(configuredOptions.responseFormat?.strict).isTrue()
+        }
+
+        @Test
+        fun `strict false is forwarded when request has strict false`() {
+            val options = OpenAiChatOptions.builder().model("gpt-5.4").build()
+            val request = StructuredOutputRequest(
+                name = "Answer",
+                schema = """{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}""",
+                strict = false,
+            )
+            val nativeSupport = NativeSupport(
+                structuredOutput = NativeStructuredOutputCapability(supported = true, strategy = "response_format")
+            )
+
+            val configured = OpenAiNativeStructuredOutputConfigurer.configure(
+                options = options,
+                structuredOutput = request,
+                nativeSupport = nativeSupport,
+                llm = null,
+            ) as OpenAiChatOptions
+
+            // strict=false must be encoded in ResponseFormat, not in options.strict
+            assertThat(configured.responseFormat?.strict).isFalse()
         }
     }
 
