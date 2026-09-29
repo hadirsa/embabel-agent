@@ -21,6 +21,7 @@ import com.embabel.agent.openai.CapabilityAwareOpenAiOptionsConverter
 import com.embabel.agent.openai.OpenAiReasoningEffortOptionsConverter
 import com.embabel.agent.openai.Gpt5ChatOptionsConverter
 import com.embabel.agent.openai.ModelCapabilities
+import com.embabel.agent.openai.OpenAiCompatibleClientProperties
 import com.embabel.agent.openai.OpenAiCompatibleModelFactory
 import com.embabel.agent.openai.StandardOpenAiOptionsConverter
 import com.embabel.agent.spi.LlmService
@@ -57,7 +58,7 @@ import org.springframework.web.reactive.function.client.WebClient
  * prefix embabel.agent.platform.models.openai.
  */
 @ConfigurationProperties(prefix = PREFIX)
-class OpenAiProperties : RetryProperties {
+class OpenAiProperties : OpenAiCompatibleClientProperties(), RetryProperties {
     /**
      * Base URL for OpenAI API requests.
      */
@@ -144,6 +145,7 @@ class OpenAiModelsConfig(
     restClientBuilder = restClientBuilder,
     webClientBuilder = webClientBuilder,
     httpClientCustomizers = httpClientCustomizers,
+    timeouts = properties.clientTimeouts(),
 ) {
 
     /**
@@ -247,7 +249,7 @@ class OpenAiModelsConfig(
             name = modelDef.modelId,
             chatModel = chatModel,
             provider = OpenAiModels.PROVIDER,
-            optionsConverter = optionsConverter,
+            optionsConverter = timeouts.optionsConverter(optionsConverter),
             knowledgeCutoffDate = modelDef.knowledgeCutoffDate,
             pricingModel = pricingModel,
             thinkingSupported = true,

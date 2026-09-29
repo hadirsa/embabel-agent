@@ -48,12 +48,10 @@ import org.springframework.ai.openai.OpenAiChatModel
 import org.springframework.ai.chat.prompt.ChatOptions
 import org.springframework.ai.openai.OpenAiChatOptions
 import org.springframework.ai.openai.OpenAiEmbeddingModel
-import org.springframework.ai.openai.OpenAiEmbeddingOptions
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.retry.support.RetryTemplate
 import org.springframework.web.client.RestClient
 import org.springframework.web.reactive.function.client.WebClient
-import java.time.Duration
 import java.time.LocalDate
 
 /**
@@ -80,6 +78,10 @@ import java.time.LocalDate
  * @param httpClientCustomizers Zero-or-more [OpenAiHttpClientBuilderCustomizer] beans to apply
  *   to the OkHttp client (proxy, TLS, interceptors, Micrometer, etc.). When none are present the
  *   factory uses a plain [OpenAIOkHttpClient] builder, preserving existing behaviour.
+ * @param timeouts Connect and read timeouts for every client this factory builds, chat and embedding.
+ *   Required here, so that a call naming it reaches this constructor. A call that does not name it
+ *   reaches the secondary constructor, which has the signature this class had before timeouts were
+ *   configurable and passes [OpenAiClientTimeouts.DEFAULT].
  */
 open class OpenAiCompatibleModelFactory(
     val baseUrl: String?,
@@ -93,12 +95,38 @@ open class OpenAiCompatibleModelFactory(
     @Suppress("UNUSED_PARAMETER")
     webClientBuilder: ObjectProvider<WebClient.Builder> = ObjectProviders.empty(),
     private val httpClientCustomizers: ObjectProvider<OpenAiHttpClientBuilderCustomizer> = ObjectProviders.empty(),
+    protected val timeouts: OpenAiClientTimeouts,
 ) {
 
-    companion object {
-        private const val CONNECT_TIMEOUT_MS = 5_000L
-        private const val READ_TIMEOUT_MS = 600_000L
+    /**
+     * The constructor as it was before timeouts were configurable, kept so that code compiled
+     * against it, Kotlin default arguments included, still links. Uses [OpenAiClientTimeouts.DEFAULT].
+     */
+    @JvmOverloads
+    constructor(
+        baseUrl: String?,
+        apiKey: String?,
+        completionsPath: String? = null,
+        embeddingsPath: String? = null,
+        httpHeaders: Map<String, String> = emptyMap(),
+        observationRegistry: ObservationRegistry = ObservationRegistry.NOOP,
+        restClientBuilder: ObjectProvider<RestClient.Builder> = ObjectProviders.empty(),
+        webClientBuilder: ObjectProvider<WebClient.Builder> = ObjectProviders.empty(),
+        httpClientCustomizers: ObjectProvider<OpenAiHttpClientBuilderCustomizer> = ObjectProviders.empty(),
+    ) : this(
+        baseUrl = baseUrl,
+        apiKey = apiKey,
+        completionsPath = completionsPath,
+        embeddingsPath = embeddingsPath,
+        httpHeaders = httpHeaders,
+        observationRegistry = observationRegistry,
+        restClientBuilder = restClientBuilder,
+        webClientBuilder = webClientBuilder,
+        httpClientCustomizers = httpClientCustomizers,
+        timeouts = OpenAiClientTimeouts.DEFAULT,
+    )
 
+    companion object {
         private val OPEN_AI = ProviderEndpoint(OpenAiModels.PROVIDER, null)
         private val DEEP_SEEK = ProviderEndpoint(DeepSeekModels.PROVIDER, "https://api.deepseek.com")
         private val MISTRAL = ProviderEndpoint(MistralAiModels.PROVIDER, "https://api.mistral.ai/v1")
@@ -253,6 +281,7 @@ open class OpenAiCompatibleModelFactory(
         private val validationModel: String,
         private val validationProvider: String,
         private val observationRegistry: ObservationRegistry = ObservationRegistry.NOOP,
+        private val timeouts: OpenAiClientTimeouts = OpenAiClientTimeouts.DEFAULT,
     ) : ByokFactory<LlmService<*>> {
 
         /**
@@ -265,10 +294,26 @@ open class OpenAiCompatibleModelFactory(
          * ```
          */
         fun validating(model: String, provider: String): ByokSpec =
-            ByokSpec(baseUrl, apiKey, model, provider, observationRegistry)
+            ByokSpec(baseUrl, apiKey, model, provider, observationRegistry, timeouts)
+
+        /**
+         * Returns a new [ByokSpec] whose clients, the validation probe's included, use [timeouts].
+         *
+         * ```kotlin
+         * OpenAiCompatibleModelFactory.openAi(userKey)
+         *     .withTimeouts(OpenAiClientTimeouts(read = Duration.ofMinutes(5)))
+         * ```
+         */
+        fun withTimeouts(timeouts: OpenAiClientTimeouts): ByokSpec =
+            ByokSpec(baseUrl, apiKey, validationModel, validationProvider, observationRegistry, timeouts)
 
         override fun buildValidated(): LlmService<*> =
-            OpenAiCompatibleModelFactory(baseUrl, apiKey, null, null, observationRegistry = observationRegistry)
+            OpenAiCompatibleModelFactory(
+                baseUrl = baseUrl,
+                apiKey = apiKey,
+                observationRegistry = observationRegistry,
+                timeouts = timeouts,
+            )
                 .buildValidated(
                     model = validationModel,
                     pricingModel = PricingModel.ALL_YOU_CAN_EAT,
@@ -312,10 +357,23 @@ open class OpenAiCompatibleModelFactory(
         private val provider: String,
         private val pricingModel: PricingModel? = null,
         private val observationRegistry: ObservationRegistry = ObservationRegistry.NOOP,
+        private val timeouts: OpenAiClientTimeouts = OpenAiClientTimeouts.DEFAULT,
     ) : ByokFactory<EmbeddingService> {
 
+        /**
+         * Returns a new [ByokEmbeddingSpec] whose client, the validation probe's included, uses
+         * [timeouts]. A large embedding batch is the usual reason to raise the read timeout.
+         */
+        fun withTimeouts(timeouts: OpenAiClientTimeouts): ByokEmbeddingSpec =
+            ByokEmbeddingSpec(baseUrl, apiKey, model, provider, pricingModel, observationRegistry, timeouts)
+
         override fun buildValidated(): EmbeddingService =
-            OpenAiCompatibleModelFactory(baseUrl, apiKey, null, null, observationRegistry = observationRegistry)
+            OpenAiCompatibleModelFactory(
+                baseUrl = baseUrl,
+                apiKey = apiKey,
+                observationRegistry = observationRegistry,
+                timeouts = timeouts,
+            )
                 .buildValidatedEmbeddingService(
                     model = model,
                     provider = provider,
@@ -403,15 +461,18 @@ open class OpenAiCompatibleModelFactory(
         // Build the Spring AI OkHttp wrapper and let each customizer configure it
         // (proxy, TLS, interceptors, Micrometer registry, etc.).
         val springAiHttpClient = SpringAiOpenAiHttpClient.builder()
-            .timeout(Duration.ofMillis(READ_TIMEOUT_MS))
+            .timeout(timeouts.toSdkTimeout())
             .observationRegistry(observationRegistry)
             .apply { customizers.forEach { it.customize(this) } }
             .build()
 
         // Wire the customized HTTP client into the SDK's ClientOptions so that
         // OpenAIClientImpl / OpenAIClientAsyncImpl use it instead of building their own.
+        // The timeout is set here too: the SDK passes the ClientOptions timeout on every call,
+        // and SpringAiOpenAiHttpClient lets that per-call value override its own.
         val builder = ClientOptions.builder()
             .httpClient(springAiHttpClient)
+            .timeout(timeouts.toSdkTimeout())
             .apiKey(resolvedApiKey())
         if (baseUrl != null) builder.baseUrl(baseUrl)
         httpHeaders.forEach { (name, value) -> builder.putHeader(name, value) }
@@ -420,7 +481,7 @@ open class OpenAiCompatibleModelFactory(
 
     private fun createOpenAiClient(): OpenAIClient {
         val builder = OpenAIOkHttpClient.builder()
-            .timeout(Duration.ofMillis(READ_TIMEOUT_MS))
+            .timeout(timeouts.toSdkTimeout())
             .apiKey(resolvedApiKey())
         if (baseUrl != null) {
             logger.info("Using custom OpenAI base URL: {}", baseUrl)
@@ -432,7 +493,7 @@ open class OpenAiCompatibleModelFactory(
 
     private fun createOpenAiClientAsync(): OpenAIClientAsync {
         val builder = OpenAIOkHttpClientAsync.builder()
-            .timeout(Duration.ofMillis(READ_TIMEOUT_MS))
+            .timeout(timeouts.toSdkTimeout())
             .apiKey(resolvedApiKey())
         if (baseUrl != null) {
             builder.baseUrl(baseUrl)
@@ -455,11 +516,13 @@ open class OpenAiCompatibleModelFactory(
             name = model,
             chatModel = chatModelOf(model),
             provider = provider,
-            optionsConverter = if (provider.equals(OpenAiModels.PROVIDER, ignoreCase = true)) {
-                OpenAiReasoningEffortOptionsConverter(optionsConverter)
-            } else {
-                optionsConverter
-            },
+            optionsConverter = timeouts.optionsConverter(
+                if (provider.equals(OpenAiModels.PROVIDER, ignoreCase = true)) {
+                    OpenAiReasoningEffortOptionsConverter(optionsConverter)
+                } else {
+                    optionsConverter
+                }
+            ),
             pricingModel = pricingModel,
             knowledgeCutoffDate = knowledgeCutoffDate,
         )
@@ -547,9 +610,7 @@ open class OpenAiCompatibleModelFactory(
         val embeddingModel = OpenAiEmbeddingModel.builder()
             .openAiClient(openAiClient)
             .metadataMode(MetadataMode.EMBED)
-            .options(OpenAiEmbeddingOptions.builder()
-                .model(model)
-                .build())
+            .options(timeouts.embeddingOptions(model).build())
             .observationRegistry(observationRegistry)
             .build()
         return SpringAiEmbeddingService(
@@ -577,8 +638,7 @@ open class OpenAiCompatibleModelFactory(
     ): ChatModel {
         return OpenAiChatModel.builder()
             .options(
-                OpenAiChatOptions.builder()
-                    .model(model)
+                timeouts.chatOptions(model)
                     .apply { if (httpHeaders.isNotEmpty()) customHeaders(httpHeaders) }
                     .build()
             )

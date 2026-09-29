@@ -17,6 +17,8 @@ package com.embabel.agent.config.models.byok
 
 import com.embabel.agent.anthropic.AnthropicModelFactory
 import com.embabel.agent.api.models.AnthropicModels
+import com.embabel.agent.api.models.GoogleGenAiModels
+import com.embabel.agent.openai.OpenAiClientTimeouts
 import com.embabel.agent.openai.OpenAiCompatibleModelFactory
 import com.embabel.common.ai.model.CredentialEmbeddingServiceFactory
 import com.embabel.common.ai.model.CredentialEndpoint
@@ -25,10 +27,19 @@ import com.embabel.common.ai.model.CredentialLlmServiceFactory
 import com.embabel.common.ai.model.ProviderCredential
 import com.embabel.common.util.loggerFor
 import org.springframework.beans.factory.ObjectProvider
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
+import org.springframework.boot.context.properties.bind.BindException
+import org.springframework.boot.context.properties.bind.Binder
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.core.env.Environment
+import org.springframework.core.env.StandardEnvironment
+import java.time.Duration
+import java.util.concurrent.ConcurrentHashMap
+
+private const val MODELS_PREFIX = "embabel.agent.platform.models"
 
 /**
  * Makes per-user keys work with nothing on the classpath but `embabel-agent-starter-byok`: one
@@ -56,14 +67,25 @@ import org.springframework.context.annotation.Configuration
  * that makes shipping them possible at all: a pure BYOK deployment deliberately has no provider
  * autoconfiguration - `embabel-agent-starter-byok` bans it - but it does have the factories.
  *
- * Nothing here caches. [com.embabel.common.ai.model.ConfigurableModelProvider] already caches what
- * a factory returns per (provider, key, model) behind a bounded LRU, so a cache here would be a
- * second, unbounded one holding a service per key the deployment has ever seen.
+ * No services are cached here. [com.embabel.common.ai.model.ConfigurableModelProvider] already
+ * caches what a factory returns per (provider, key, model) behind a bounded LRU, so a cache here
+ * would be a second, unbounded one holding a service per key the deployment has ever seen. The one
+ * cache here holds bound timeouts per provider, which is bounded by the number of providers.
  */
 @Configuration(proxyBeanMethods = false)
-class CredentialEndpointConfig {
+class CredentialEndpointConfig @Autowired constructor(
+    private val environment: Environment,
+) {
+
+    /**
+     * For a caller building this configuration by hand. Timeouts then come from system properties
+     * and environment variables only.
+     */
+    constructor() : this(StandardEnvironment())
 
     private val logger = loggerFor<CredentialEndpointConfig>()
+
+    private val timeoutsByPrefix = ConcurrentHashMap<String, OpenAiClientTimeouts>()
 
     /**
      * Builds anything routed to Anthropic's protocol, whoever routed it there.
@@ -116,7 +138,11 @@ class CredentialEndpointConfig {
         return CredentialLlmServiceFactory { credential, model ->
             val endpoint = resolvedByApplication(resolvers, credential, model) ?: openAiCompatibleEndpointFor(credential)
             (endpoint as? CredentialEndpoint.OpenAiCompatible)?.let {
-                OpenAiCompatibleModelFactory(baseUrl = it.baseUrl, apiKey = credential.apiKey)
+                OpenAiCompatibleModelFactory(
+                    baseUrl = it.baseUrl,
+                    apiKey = credential.apiKey,
+                    timeouts = timeoutsFor(it.provider),
+                )
                     .openAiCompatibleLlm(
                         model = model,
                         pricingModel = it.pricingModel,
@@ -155,7 +181,11 @@ class CredentialEndpointConfig {
         return CredentialEmbeddingServiceFactory { credential, model ->
             val endpoint = resolvedByApplication(resolvers, credential, model) ?: openAiCompatibleEndpointFor(credential)
             (endpoint as? CredentialEndpoint.OpenAiCompatible)?.let {
-                OpenAiCompatibleModelFactory(baseUrl = it.baseUrl, apiKey = credential.apiKey)
+                OpenAiCompatibleModelFactory(
+                    baseUrl = it.baseUrl,
+                    apiKey = credential.apiKey,
+                    timeouts = timeoutsFor(it.provider),
+                )
                     .buildValidatedEmbeddingService(
                         model = model,
                         provider = it.provider,
@@ -180,6 +210,54 @@ class CredentialEndpointConfig {
         model: String,
     ): CredentialEndpoint? =
         resolvers.orderedStream().toList().firstNotNullOfOrNull { it.resolve(credential, model) }
+
+    /**
+     * The timeouts configured for [provider], under the same prefix its platform configuration
+     * uses - `embabel.agent.platform.models.openai.read-timeout` applies to a user's OpenAI key as
+     * it does to the deployment's. How long a model takes depends on the endpoint, not on whose key
+     * pays for the call.
+     *
+     * Bound from the environment rather than read from the provider's properties bean, because a
+     * pure BYOK deployment has no provider autoconfiguration and so no such bean. A provider an
+     * application's resolver adds is configured the same way, under its own normalised name.
+     *
+     * Bound on the first call for a provider and cached per prefix after that, because the set of
+     * providers is open - a resolver can route to one this configuration has never heard of - so
+     * there is no list to bind eagerly at startup. The cost is that a malformed value, say
+     * `read-timeout: 5 minutes`, is not reported at startup: it surfaces on the first call for that
+     * provider, as an [InvalidProviderTimeoutException] naming the property, and on every call after
+     * it until fixed. A failed bind is not cached, and never falls back to a default.
+     */
+    private fun timeoutsFor(provider: String): OpenAiClientTimeouts =
+        timeoutsByPrefix.computeIfAbsent(timeoutPrefixFor(provider), ::bindTimeouts)
+
+    private fun bindTimeouts(prefix: String): OpenAiClientTimeouts {
+        val binder = Binder.get(environment)
+        return OpenAiClientTimeouts(
+            connect = bindDuration(binder, "$prefix.connect-timeout") ?: OpenAiClientTimeouts.DEFAULT_CONNECT,
+            read = bindDuration(binder, "$prefix.read-timeout"),
+        )
+    }
+
+    private fun bindDuration(binder: Binder, property: String): Duration? =
+        try {
+            binder.bind(property, Duration::class.java).orElse(null)
+        } catch (e: BindException) {
+            throw InvalidProviderTimeoutException(property, e)
+        }
+
+    internal companion object {
+
+        /**
+         * `Mistral AI` becomes `embabel.agent.platform.models.mistralai`, matching the provider
+         * modules' own prefixes. Gemini is the exception: over this protocol it is configured as
+         * `gemini`, while `googlegenai` belongs to the native Google GenAI module.
+         */
+        internal fun timeoutPrefixFor(provider: String): String {
+            val name = provider.lowercase().filter(Char::isLetterOrDigit)
+            return "$MODELS_PREFIX.${if (name == GoogleGenAiModels.PROVIDER.lowercase()) "gemini" else name}"
+        }
+    }
 
     /**
      * Anthropic's own endpoint, or null if this is not Anthropic's key.

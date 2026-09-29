@@ -17,6 +17,7 @@ package com.embabel.agent.config.models.zai
 
 import com.embabel.agent.api.models.ZaiModels
 import com.embabel.agent.config.models.zai.ZaiProperties.Companion.PREFIX
+import com.embabel.agent.openai.OpenAiCompatibleClientProperties
 import com.embabel.agent.openai.OpenAiCompatibleModelFactory
 import com.embabel.agent.spi.LlmService
 import com.embabel.agent.spi.common.RetryProperties
@@ -50,7 +51,7 @@ import org.springframework.web.reactive.function.client.WebClient
  * when calling Z.ai APIs.
  */
 @ConfigurationProperties(prefix = PREFIX)
-class ZaiProperties : RetryProperties {
+class ZaiProperties : OpenAiCompatibleClientProperties(), RetryProperties {
     /**
      * Base URL for Z.ai API requests. Z.ai/GLM exposes an OpenAI-compatible chat-completions
      * endpoint under the "PaaS v4" path, so this is the host + `/api/paas/v4` prefix; the
@@ -136,6 +137,7 @@ class ZaiModelsConfig(
     observationRegistry = observationRegistry.getIfUnique { ObservationRegistry.NOOP },
     restClientBuilder = restClientBuilder,
     webClientBuilder = webClientBuilder,
+    timeouts = properties.clientTimeouts(),
 ) {
 
     init {

@@ -16,6 +16,7 @@
 package com.embabel.agent.config.models.openai.custom
 
 import com.embabel.agent.config.models.openai.custom.OpenAiCustomProperties.Companion.PREFIX
+import com.embabel.agent.openai.OpenAiCompatibleClientProperties
 import com.embabel.agent.openai.OpenAiCompatibleModelFactory
 import com.embabel.agent.openai.StandardOpenAiOptionsConverter
 import com.embabel.agent.spi.LlmService
@@ -43,7 +44,7 @@ import org.springframework.web.reactive.function.client.WebClient
  * prefix embabel.agent.platform.models.openai.custom
  */
 @ConfigurationProperties(prefix = PREFIX)
-class OpenAiCustomProperties : RetryProperties {
+class OpenAiCustomProperties : OpenAiCompatibleClientProperties(), RetryProperties {
     /**
      * Base URL for OpenAI Custom API requests.
      */
@@ -150,6 +151,7 @@ class OpenAiCustomModelsConfig(
     observationRegistry = observationRegistry.getIfUnique { ObservationRegistry.NOOP },
     restClientBuilder = restClientBuilder,
     webClientBuilder = webClientBuilder,
+    timeouts = properties.clientTimeouts(),
 ) {
 
     private val customModelList: List<String> = (envCustomModels ?: properties.models)
@@ -209,7 +211,7 @@ class OpenAiCustomModelsConfig(
             name = modelId,
             chatModel = chatModel,
             provider = CUSTOM_PROVIDER,
-            optionsConverter = StandardOpenAiOptionsConverter,
+            optionsConverter = timeouts.optionsConverter(StandardOpenAiOptionsConverter),
         )
     }
 

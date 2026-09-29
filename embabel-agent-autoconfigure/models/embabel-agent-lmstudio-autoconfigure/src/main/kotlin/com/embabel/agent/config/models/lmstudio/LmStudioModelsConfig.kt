@@ -17,6 +17,7 @@ package com.embabel.agent.config.models.lmstudio
 
 import com.embabel.agent.api.models.LmStudioModels
 import com.embabel.agent.config.models.lmstudio.LmStudioProperties.Companion.PREFIX
+import com.embabel.agent.openai.OpenAiCompatibleClientProperties
 import com.embabel.agent.openai.OpenAiCompatibleModelFactory
 import com.embabel.agent.spi.common.RetryProperties
 import com.embabel.common.ai.autoconfig.ProviderInitialization
@@ -50,7 +51,7 @@ import org.springframework.web.client.RestClient
 import org.springframework.web.reactive.function.client.WebClient
 
 @ConfigurationProperties(prefix = PREFIX)
-class LmStudioProperties : RetryProperties {
+class LmStudioProperties : OpenAiCompatibleClientProperties(), RetryProperties {
 
     /**
      * Base URL for LM Studio endpoint
@@ -128,6 +129,7 @@ class LmStudioModelsConfig(
     observationRegistry = observationRegistry.getIfUnique { ObservationRegistry.NOOP },
     restClientBuilder = restClientBuilder,
     webClientBuilder = webClientBuilder,
+    timeouts = lmStudioProperties.clientTimeouts(),
 ) {
 
     private val log = LoggerFactory.getLogger(LmStudioModelsConfig::class.java)

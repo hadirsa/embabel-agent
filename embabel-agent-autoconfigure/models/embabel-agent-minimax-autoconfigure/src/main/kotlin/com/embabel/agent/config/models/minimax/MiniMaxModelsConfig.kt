@@ -17,6 +17,7 @@ package com.embabel.agent.config.models.minimax
 
 import com.embabel.agent.api.models.MiniMaxModels
 import com.embabel.agent.config.models.minimax.MiniMaxProperties.Companion.PREFIX
+import com.embabel.agent.openai.OpenAiCompatibleClientProperties
 import com.embabel.agent.openai.OpenAiCompatibleModelFactory
 import com.embabel.agent.spi.LlmService
 import com.embabel.agent.spi.common.RetryProperties
@@ -46,7 +47,7 @@ import java.time.LocalDate
  * when calling MiniMax APIs.
  */
 @ConfigurationProperties(prefix = PREFIX)
-class MiniMaxProperties : RetryProperties {
+class MiniMaxProperties : OpenAiCompatibleClientProperties(), RetryProperties {
     /**
      * Base URL for MiniMax API requests.
      */
@@ -122,6 +123,7 @@ class MiniMaxModelsConfig(
     observationRegistry = observationRegistry.getIfUnique { ObservationRegistry.NOOP },
     restClientBuilder = restClientBuilder,
     webClientBuilder = webClientBuilder,
+    timeouts = properties.clientTimeouts(),
 ) {
 
     init {

@@ -18,6 +18,7 @@ package com.embabel.agent.config.models.gemini
 import com.embabel.agent.api.models.GeminiModels
 import com.embabel.agent.config.models.gemini.GeminiProperties.Companion.PREFIX
 import com.embabel.agent.openai.OpenAiChatOptionsConverter
+import com.embabel.agent.openai.OpenAiCompatibleClientProperties
 import com.embabel.agent.openai.OpenAiCompatibleModelFactory
 import com.embabel.agent.spi.LlmService
 import com.embabel.agent.spi.common.RetryProperties
@@ -46,7 +47,7 @@ import org.springframework.web.reactive.function.client.WebClient
  * when calling Google Gemini APIs.
  */
 @ConfigurationProperties(prefix = PREFIX)
-class GeminiProperties : RetryProperties {
+class GeminiProperties : OpenAiCompatibleClientProperties(), RetryProperties {
     /**
      * Base URL for Gemini API requests.
      */
@@ -116,6 +117,7 @@ class GeminiModelsConfig(
     observationRegistry = observationRegistry.getIfUnique { ObservationRegistry.NOOP },
     restClientBuilder = restClientBuilder,
     webClientBuilder = webClientBuilder,
+    timeouts = properties.clientTimeouts(),
 ) {
 
     init {
