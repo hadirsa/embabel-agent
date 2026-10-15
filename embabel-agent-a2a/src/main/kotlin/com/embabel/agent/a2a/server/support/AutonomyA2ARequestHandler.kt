@@ -331,7 +331,7 @@ class AutonomyA2ARequestHandler(
         }
     }
 
-    private fun createResultArtifact(
+    internal fun createResultArtifact(
         result: AgentProcessExecution,
         acceptedOutputModes: List<String>? = emptyList(),
     ): Artifact {
@@ -340,27 +340,24 @@ class AutonomyA2ARequestHandler(
         val parts = buildList<Part<*>> {
             val output = result.output
 
+            // The A2A wire format keeps only maps, lists, strings, numbers and booleans in a DataPart,
+            // so convert the output to those with Jackson
+            val objectMapper = tools.jackson.databind.json.JsonMapper.builder()
+                .addModule(tools.jackson.module.kotlin.kotlinModule())
+                .findAndAddModules()
+                .build()
+            val outputValue = objectMapper.convertValue(output, Any::class.java)
+
             // Check if output implements HasContent
             if (output is HasContent) {
                 // Extract content and add as TextPart for end-user visibility
                 add(TextPart(output.content))
 
-                // Serialize the object without the content field for DataPart
-                // Convert to map using Jackson, then remove the content field
-                val objectMapper = tools.jackson.databind.json.JsonMapper.builder()
-                    .addModule(tools.jackson.module.kotlin.kotlinModule())
-                    .findAndAddModules()
-                    .build()
-
+                // The DataPart carries the object without the content field
                 @Suppress("UNCHECKED_CAST")
-                val outputMap = objectMapper.convertValue(output, Map::class.java) as MutableMap<String, Any?>
-                outputMap.remove("content")
-
-                add(DataPart(mapOf("output" to outputMap)))
-            } else {
-                // Standard behavior: serialize entire output in DataPart
-                add(DataPart(mapOf("output" to output)))
+                (outputValue as MutableMap<String, Any?>).remove("content")
             }
+            add(DataPart(mapOf("output" to outputValue)))
         }
 
         return Artifact.builder()
