@@ -15,13 +15,17 @@
  */
 package com.embabel.agent.a2a.server.support
 
+import com.embabel.agent.a2a.config.A2AConfigurationProperties
 import io.a2a.spec.StreamingEventKind
 import io.a2a.spec.Task
 import io.a2a.spec.TaskState
 import io.a2a.spec.TaskStatus
 import io.a2a.spec.TaskStatusUpdateEvent
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
+import java.time.Clock
+import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -31,10 +35,18 @@ import javax.annotation.concurrent.ThreadSafe
 /**
  * Manages task state and history for streaming and resubscription support.
  * Tracks active tasks, completed tasks, and their event history.
+ * Completed tasks are evicted once they have been finished for longer than [taskRetention].
  */
 @Service
 @ThreadSafe
-class TaskStateManager {
+class TaskStateManager @JvmOverloads constructor(
+    val taskRetention: Duration = A2AConfigurationProperties.DEFAULT_TASK_RETENTION,
+    private val clock: Clock = Clock.systemUTC(),
+) {
+
+    @Autowired
+    constructor(properties: A2AConfigurationProperties) : this(properties.server.taskRetention)
+
     private val logger = LoggerFactory.getLogger(TaskStateManager::class.java)
 
     private val tasks = ConcurrentHashMap<String, TaskInfo>()
@@ -60,10 +72,13 @@ class TaskStateManager {
     @JvmOverloads
     fun registerTask(taskId: String, contextId: String, streamId: String? = null) {
         logger.info("Registering task: taskId={}, contextId={}, streamId={}", taskId, contextId, streamId)
+        val now = clock.instant()
+        cleanupOldTasks(now.minus(taskRetention))
         tasks[taskId] = TaskInfo(
             taskId = taskId,
             contextId = contextId,
-            streamId = streamId
+            streamId = streamId,
+            createdAt = now,
         )
     }
 
@@ -78,7 +93,7 @@ class TaskStateManager {
                 taskState == null -> taskInfo
                 taskState.isFinal -> {
                     logger.info("Task {} completed with state {}", taskId, taskState)
-                    taskInfo.copy(currentState = taskState, completedAt = Instant.now())
+                    taskInfo.copy(currentState = taskState, completedAt = clock.instant())
                 }
 
                 else -> taskInfo.copy(currentState = taskState)

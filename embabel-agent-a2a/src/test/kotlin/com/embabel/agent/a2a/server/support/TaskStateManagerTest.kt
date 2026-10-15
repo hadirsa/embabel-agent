@@ -21,10 +21,14 @@ import io.a2a.spec.TaskState
 import io.a2a.spec.TaskStatus
 import io.a2a.spec.TaskStatusUpdateEvent
 import io.a2a.spec.TextPart
+import io.mockk.every
+import io.mockk.mockk
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import java.time.Clock
+import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.CountDownLatch
@@ -304,6 +308,54 @@ class TaskStateManagerTest {
             taskStateManager.registerTask("task-1", "ctx-1")
 
             assertEquals(TaskState.WORKING, taskStateManager.getTask("task-1")!!.status.state)
+        }
+    }
+
+    @Nested
+    inner class Retention {
+
+        private val retention = Duration.ofMinutes(10)
+        private var now = Instant.parse("2026-01-01T00:00:00Z")
+        private val clock = mockk<Clock> { every { instant() } answers { now } }
+        private val manager = TaskStateManager(retention, clock)
+
+        @Test
+        fun `registering a task evicts tasks completed longer ago than the retention`() {
+            manager.registerTask("task-1", "ctx-1")
+            manager.recordEvent("task-1", statusUpdate(TaskState.COMPLETED))
+            now = now.plus(retention).plusSeconds(1)
+
+            manager.registerTask("task-2", "ctx-1")
+
+            assertFalse(manager.taskExists("task-1"))
+            assertTrue(manager.taskExists("task-2"))
+        }
+
+        @Test
+        fun `keeps tasks completed within the retention`() {
+            manager.registerTask("task-1", "ctx-1")
+            manager.recordEvent("task-1", statusUpdate(TaskState.FAILED))
+            now = now.plus(retention).minusSeconds(1)
+
+            manager.registerTask("task-2", "ctx-1")
+
+            assertEquals(TaskState.FAILED, manager.getTask("task-1")?.status?.state)
+        }
+
+        @Test
+        fun `does not evict active tasks however old`() {
+            manager.registerTask("task-1", "ctx-1")
+            manager.recordEvent("task-1", statusUpdate(TaskState.WORKING))
+            now = now.plus(retention.multipliedBy(100))
+
+            manager.registerTask("task-2", "ctx-1")
+
+            assertTrue(manager.isTaskActive("task-1"))
+        }
+
+        @Test
+        fun `retention defaults to one hour`() {
+            assertEquals(Duration.ofHours(1), TaskStateManager().taskRetention)
         }
     }
 
