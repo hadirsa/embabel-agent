@@ -15,11 +15,14 @@
  */
 package com.embabel.agent.anthropic
 
+import com.anthropic.models.messages.OutputConfig
+import com.embabel.agent.api.models.AnthropicModels
 import com.embabel.agent.test.models.OptionsConverterTestSupport
 import com.embabel.chat.MessageRole
 import com.embabel.common.ai.model.LlmOptions
 import com.embabel.common.ai.model.Thinking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Nested
@@ -224,6 +227,111 @@ class AnthropicOptionsConverterTest : OptionsConverterTestSupport(
 
             val retrieved = llmOptions.getAnthropicCaching()
             assertEquals(true, retrieved?.systemPrompt)
+        }
+    }
+
+    @Nested
+    inner class SamplingParameterTests {
+
+        @Test
+        fun `claude-opus-4-8 without thinking — temperature passed through`() {
+            // ThinkingMode Disabled on ≥4.7: temperature must not be suppressed
+            val opts = optionsConverter.convertOptions(
+                LlmOptions().withTemperature(0.7),
+                AnthropicModels.CLAUDE_OPUS_4_8,
+            ) as AnthropicChatOptions
+            assertEquals(0.7, opts.temperature)
+        }
+
+        @Test
+        fun `claude-opus-4-8 without thinking — topP passed through`() {
+            val opts = optionsConverter.convertOptions(
+                LlmOptions().withTopP(0.9),
+                AnthropicModels.CLAUDE_OPUS_4_8,
+            ) as AnthropicChatOptions
+            assertEquals(0.9, opts.topP)
+        }
+
+        @Test
+        fun `claude-sonnet-5-5 without thinking — temperature passed through`() {
+            // ThinkingMode Omit on 5.x: temperature must not be suppressed
+            val opts = optionsConverter.convertOptions(
+                LlmOptions().withTemperature(0.5),
+                AnthropicModels.CLAUDE_SONNET_5_5,
+            ) as AnthropicChatOptions
+            assertEquals(0.5, opts.temperature)
+        }
+
+        @Test
+        fun `claude-sonnet-5-5 with thinking — temperature suppressed`() {
+            // ThinkingMode Adaptive: temperature conflicts with active thinking
+            val opts = optionsConverter.convertOptions(
+                LlmOptions().withThinking(Thinking.withTokenBudget(8000)).withTemperature(0.7),
+                AnthropicModels.CLAUDE_SONNET_5_5,
+            ) as AnthropicChatOptions
+            assertNull(opts.temperature)
+        }
+
+        @Test
+        fun `claude-opus-4-8 with thinking — temperature suppressed`() {
+            // ThinkingMode Adaptive (opus-4-8 ≥4.7 with budget): temperature must be suppressed
+            val opts = optionsConverter.convertOptions(
+                LlmOptions().withThinking(Thinking.withTokenBudget(8000)).withTemperature(0.7),
+                AnthropicModels.CLAUDE_OPUS_4_8,
+            ) as AnthropicChatOptions
+            assertNull(opts.temperature)
+        }
+    }
+
+    @Nested
+    inner class Claude5ThinkingTests {
+
+        @Test
+        fun `claude-sonnet-5-5 with thinking uses adaptive mode — thinkingEnabled rejected with HTTP 400`() {
+            val opts = optionsConverter.convertOptions(
+                LlmOptions().withThinking(Thinking.withTokenBudget(8000)),
+                AnthropicModels.CLAUDE_SONNET_5_5,
+            ) as AnthropicChatOptions
+            assertTrue(opts.thinking.isAdaptive(), "claude-sonnet-5-5 must use adaptive thinking")
+        }
+
+        @Test
+        fun `claude-sonnet-5-5 with thinking maps budget 8000 to HIGH effort`() {
+            val opts = optionsConverter.convertOptions(
+                LlmOptions().withThinking(Thinking.withTokenBudget(8000)),
+                AnthropicModels.CLAUDE_SONNET_5_5,
+            ) as AnthropicChatOptions
+            assertEquals(OutputConfig.Effort.HIGH, opts.outputConfig?.effort()?.orElse(null))
+        }
+
+        @Test
+        fun `claude-sonnet-5-5 without thinking does not send disabled`() {
+            val opts = optionsConverter.convertOptions(
+                LlmOptions(),
+                AnthropicModels.CLAUDE_SONNET_5_5,
+            ) as AnthropicChatOptions
+            // null thinking = field omitted entirely from request, which is correct for Claude 5.1+
+            assertFalse(opts.thinking?.isDisabled() == true, "claude-sonnet-5-5 must not send thinking.type=disabled")
+        }
+
+        @Test
+        fun `claude-fable-5-1 without thinking does not send disabled`() {
+            val opts = optionsConverter.convertOptions(
+                LlmOptions(),
+                AnthropicModels.CLAUDE_FABLE_5_1,
+            ) as AnthropicChatOptions
+            // null thinking = field omitted entirely from request, which is correct for Claude 5.1+
+            assertFalse(opts.thinking?.isDisabled() == true, "claude-fable-5-1 must not send thinking.type=disabled")
+        }
+
+        @Test
+        fun `claude-sonnet-4-5 with thinking uses enabled mode with budget`() {
+            val opts = optionsConverter.convertOptions(
+                LlmOptions().withThinking(Thinking.withTokenBudget(2000)),
+                AnthropicModels.CLAUDE_SONNET_4_5,
+            ) as AnthropicChatOptions
+            assertTrue(opts.thinking.isEnabled(), "expected legacy enabled thinking for claude-sonnet-4-5")
+            assertEquals(2000L, opts.thinking.asEnabled().budgetTokens())
         }
     }
 
