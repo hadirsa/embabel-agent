@@ -165,7 +165,8 @@ private class AgentCardHandlerWebFacade(
             errorResponse(null, JSONParseError(e.message))
         } catch (e: JsonSyntaxException) {
             errorResponse(null, JSONParseError(e.message))
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            // Throwable, not Exception: errors such as kotlin.NotImplementedError must still get a JSON-RPC response
             logger.error("Error handling JSON-RPC request: {}", e.message, e)
             errorResponse(requestIdOf(body), InternalError("Internal server error: ${e.message}"))
         }

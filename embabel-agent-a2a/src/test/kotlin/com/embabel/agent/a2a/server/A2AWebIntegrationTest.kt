@@ -225,6 +225,20 @@ class A2AWebIntegrationTest(
         }
 
         @Test
+        fun `should answer with JSON-RPC error when handler throws an Error`() {
+            // GetTask is still TODO(), which throws kotlin.NotImplementedError: an Error, not an Exception
+            val body = JSONRPCUtils.toJsonRPCRequest(
+                "req-1",
+                A2AMethods.GET_TASK_METHOD,
+                ProtoUtils.ToProto.getTaskRequest(TaskQueryParams("task-123")),
+            )
+
+            val error = errorOf(postJsonRpc(body))
+
+            assertEquals(A2AErrorCodes.INTERNAL.code(), error["code"])
+        }
+
+        @Test
         fun `should reject A2A 0_3 method name`() {
             val error = errorOf(postJsonRpc(sendMessageBody(method = "message/send")))
 
