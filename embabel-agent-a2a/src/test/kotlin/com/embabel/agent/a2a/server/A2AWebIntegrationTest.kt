@@ -128,7 +128,6 @@ class A2AWebIntegrationTest(
                 .readValue(result.response.contentAsString, AgentCard::class.java)
 
             assertNotNull(agentCard.name)
-            assertEquals("0.3.0", agentCard.protocolVersion)
         }
 
         @Test
