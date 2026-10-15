@@ -15,9 +15,9 @@
  */
 package com.embabel.agent.a2a.server.support
 
-import com.embabel.common.util.EmbabelObjectMapperHolder
-import io.a2a.spec.SendStreamingMessageResponse
-import io.a2a.spec.StreamingEventKind
+import org.a2aproject.sdk.grpc.utils.JSONRPCUtils
+import org.a2aproject.sdk.grpc.utils.ProtoUtils
+import org.a2aproject.sdk.spec.StreamingEventKind
 import org.slf4j.LoggerFactory
 import org.springframework.http.MediaType
 import org.springframework.stereotype.Service
@@ -32,7 +32,6 @@ import java.util.concurrent.TimeUnit
  */
 @Service
 class A2AStreamingHandler(
-    private val embabelObjectMapperHolder: EmbabelObjectMapperHolder,
     private val taskStateManager: TaskStateManager
 ) {
     private val logger = LoggerFactory.getLogger(A2AStreamingHandler::class.java)
@@ -119,16 +118,14 @@ class A2AStreamingHandler(
                 taskStateManager.recordEvent(tid, event)
             }
 
-            // All events must be wrapped in SendStreamingMessageResponse per A2A protocol
-            val response = SendStreamingMessageResponse(
-                "2.0",
+            // Each event is a JSON-RPC response to the streaming request, in the A2A wire format
+            val response = JSONRPCUtils.toJsonRPCResultResponse(
                 streamId,
-                event,
-                null
+                ProtoUtils.ToProto.taskOrMessageStream(event),
             )
 
             val eventData = SseEmitter.event()
-                .data(embabelObjectMapperHolder.get().writeValueAsString(response), MediaType.APPLICATION_JSON)
+                .data(response, MediaType.APPLICATION_JSON)
             emitter.send(eventData)
         } catch (e: Exception) {
             logger.error("Error sending stream event", e)

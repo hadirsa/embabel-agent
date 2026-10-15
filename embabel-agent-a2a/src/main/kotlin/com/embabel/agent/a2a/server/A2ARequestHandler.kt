@@ -15,9 +15,9 @@
  */
 package com.embabel.agent.a2a.server
 
-import io.a2a.spec.JSONRPCResponse
-import io.a2a.spec.NonStreamingJSONRPCRequest
-import io.a2a.spec.StreamingJSONRPCRequest
+import org.a2aproject.sdk.jsonrpc.common.wrappers.A2AResponse
+import org.a2aproject.sdk.jsonrpc.common.wrappers.NonStreamingJSONRPCRequest
+import org.a2aproject.sdk.jsonrpc.common.wrappers.StreamingJSONRPCRequest
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter
 
 /**
@@ -30,11 +30,11 @@ interface A2ARequestHandler {
      * @param request the JSON-RPC request
      * @return the JSON-RPC response
      */
-    fun handleJsonRpc(request: NonStreamingJSONRPCRequest<*>): JSONRPCResponse<*>
+    fun handleJsonRpc(request: NonStreamingJSONRPCRequest<*>): A2AResponse<*>
 
     /**
      * Handles a streaming JSON-RPC request using Server-Sent Events (SSE).
-     * This method is called when a client requests a streaming response for methods like "message/stream".
+     * This method is called when a client requests a streaming response for methods like "SendStreamingMessage".
      *
      * The default implementation throws [UnsupportedOperationException] as streaming is not supported.
      * Override this method in implementations that support streaming responses.

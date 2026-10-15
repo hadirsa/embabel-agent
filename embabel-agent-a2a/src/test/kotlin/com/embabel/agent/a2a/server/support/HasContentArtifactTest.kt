@@ -18,8 +18,8 @@ package com.embabel.agent.a2a.server.support
 import com.embabel.agent.domain.library.HasContent
 import tools.jackson.databind.ObjectMapper
 import tools.jackson.module.kotlin.jacksonObjectMapper
-import io.a2a.spec.DataPart
-import io.a2a.spec.TextPart
+import org.a2aproject.sdk.spec.DataPart
+import org.a2aproject.sdk.spec.TextPart
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import java.time.Instant
@@ -87,7 +87,7 @@ class HasContentArtifactTest {
         // Verify DataPart
         assertTrue(parts[1] is DataPart, "Second part should be DataPart")
         val dataPart = parts[1] as DataPart
-        val outputData = dataPart.data["output"] as Map<*, *>
+        val outputData = (dataPart.data as Map<*, *>)["output"] as Map<*, *>
 
         assertFalse(outputData.containsKey("content"), "DataPart should not contain 'content' field")
         assertEquals("Test Title", outputData["title"], "DataPart should contain title")
@@ -124,7 +124,7 @@ class HasContentArtifactTest {
         // Verify DataPart
         assertTrue(parts[0] is DataPart, "Part should be DataPart")
         val dataPart = parts[0] as DataPart
-        val outputData = dataPart.data["output"] as TestResult
+        val outputData = (dataPart.data as Map<*, *>)["output"] as TestResult
 
         assertEquals("Success", outputData.message)
         assertEquals(42, outputData.value)

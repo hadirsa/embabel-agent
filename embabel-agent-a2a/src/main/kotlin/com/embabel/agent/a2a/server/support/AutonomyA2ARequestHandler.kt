@@ -22,7 +22,21 @@ import com.embabel.agent.api.common.autonomy.AgentProcessExecution
 import com.embabel.agent.api.common.autonomy.Autonomy
 import com.embabel.agent.api.event.AgenticEventListener
 import com.embabel.agent.core.ProcessOptions
-import io.a2a.spec.*
+import com.embabel.agent.domain.library.HasContent
+import org.a2aproject.sdk.jsonrpc.common.wrappers.A2AErrorResponse
+import org.a2aproject.sdk.jsonrpc.common.wrappers.A2AResponse
+import org.a2aproject.sdk.jsonrpc.common.wrappers.CancelTaskRequest
+import org.a2aproject.sdk.jsonrpc.common.wrappers.CancelTaskResponse
+import org.a2aproject.sdk.jsonrpc.common.wrappers.GetTaskRequest
+import org.a2aproject.sdk.jsonrpc.common.wrappers.GetTaskResponse
+import org.a2aproject.sdk.jsonrpc.common.wrappers.NonStreamingJSONRPCRequest
+import org.a2aproject.sdk.jsonrpc.common.wrappers.SendMessageRequest
+import org.a2aproject.sdk.jsonrpc.common.wrappers.SendMessageResponse
+import org.a2aproject.sdk.jsonrpc.common.wrappers.SendStreamingMessageRequest
+import org.a2aproject.sdk.jsonrpc.common.wrappers.StreamingJSONRPCRequest
+import org.a2aproject.sdk.jsonrpc.common.wrappers.SubscribeToTaskRequest
+import org.a2aproject.sdk.spec.*
+import org.a2aproject.sdk.spec.InternalError
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter
@@ -46,26 +60,13 @@ class AutonomyA2ARequestHandler(
     override fun handleJsonRpcStream(request: StreamingJSONRPCRequest<*>): SseEmitter {
         return when (request) {
             is SendStreamingMessageRequest -> handleMessageStream(request)
-            else -> throw UnsupportedOperationException("Method ${request.method} is not supported for streaming")
-        }
-    }
-
-    /**
-     * Handles streaming JSON-RPC requests that are not part of the standard SDK
-     */
-    fun handleCustomStreamingRequest(method: String, requestMap: Map<String, Any>, objectMapper: tools.jackson.databind.ObjectMapper): SseEmitter {
-        return when (method) {
-            TaskResubscriptionRequest.METHOD -> {
-                val request = objectMapper.convertValue(requestMap, TaskResubscriptionRequest::class.java)
-                handleTaskResubscribe(request)
-            }
-            else -> throw UnsupportedOperationException("Method $method is not supported for streaming")
+            is SubscribeToTaskRequest -> handleTaskResubscribe(request)
         }
     }
 
     override fun handleJsonRpc(
         request: NonStreamingJSONRPCRequest<*>,
-    ): JSONRPCResponse<*> {
+    ): A2AResponse<*> {
         logger.info("Received JSONRPC message {}: {}", request.method, request::class.java.name)
         agenticEventListener.onPlatformEvent(
             A2ARequestEvent(
@@ -85,8 +86,8 @@ class AutonomyA2ARequestHandler(
             }
 
             is CancelTaskRequest -> {
-                val tip = request.params
-                handleCancelTask(request, tip)
+                val ctp = request.params
+                handleCancelTask(request, ctp)
             }
 
             else -> {
@@ -106,7 +107,7 @@ class AutonomyA2ARequestHandler(
     private fun handleMessageSend(
         request: SendMessageRequest,
         params: MessageSendParams,
-    ): JSONRPCResponse<*> {
+    ): A2AResponse<*> {
         // TODO handle other message parts and handle errors
         val intent = params.message.parts.filterIsInstance<TextPart>().single().text
         logger.info("Handling message send request with intent: '{}'", intent)
@@ -119,7 +120,7 @@ class AutonomyA2ARequestHandler(
             // Extract content for status message if output is HasContent
             val statusMessage = extractContentForDisplay(result)
 
-            val task = Task.Builder()
+            val task = Task.builder()
                 .id(ensureTaskId(params.message.taskId))
                 .contextId(ensureContextId(params.message.contextId))
                 .status(createCompletedTaskStatus(params, statusMessage))
@@ -137,13 +138,9 @@ class AutonomyA2ARequestHandler(
         } catch (e: Exception) {
             logger.error("Error handling message send request", e)
             // TODO other kinds of errors
-            return JSONRPCErrorResponse(
-                ensureTaskId(params.message.taskId),
-                TaskNotFoundError(
-                    null,
-                    "Internal error: ${e.message}",
-                    e.stackTraceToString()
-                )
+            return A2AErrorResponse(
+                request.id,
+                InternalError("Internal error: ${e.message}"),
             )
         }
     }
@@ -161,7 +158,7 @@ class AutonomyA2ARequestHandler(
                 // Send initial status event
                 streamingHandler.sendStreamEvent(
                     streamId,
-                    TaskStatusUpdateEvent.Builder()
+                    TaskStatusUpdateEvent.builder()
                         .taskId(taskId)
                         .contextId(contextId)
                         .status(createWorkingTaskStatus(params, "Task started..."))
@@ -182,7 +179,7 @@ class AutonomyA2ARequestHandler(
                 // Send intermediate status updates
                 streamingHandler.sendStreamEvent(
                     streamId,
-                    TaskStatusUpdateEvent.Builder()
+                    TaskStatusUpdateEvent.builder()
                         .taskId(taskId)
                         .contextId(contextId)
                         .status(createWorkingTaskStatus(params, "Processing task..."))
@@ -198,11 +195,10 @@ class AutonomyA2ARequestHandler(
                 // Task objects in streaming should only appear at the beginning, not at the end
                 streamingHandler.sendStreamEvent(
                     streamId,
-                    TaskStatusUpdateEvent.Builder()
+                    TaskStatusUpdateEvent.builder()
                         .taskId(taskId)
                         .contextId(contextId)
                         .status(createCompletedTaskStatus(params, statusMessage))
-                        .isFinal(true)
                         .build(),
                     taskId
                 )
@@ -211,7 +207,7 @@ class AutonomyA2ARequestHandler(
                 try {
                     streamingHandler.sendStreamEvent(
                         streamId,
-                        TaskStatusUpdateEvent.Builder()
+                        TaskStatusUpdateEvent.builder()
                             .taskId(taskId)
                             .contextId(contextId)
                             .status(createFailedTaskStatus(params, e))
@@ -232,7 +228,7 @@ class AutonomyA2ARequestHandler(
     /**
      * Handles task resubscription requests
      */
-    fun handleTaskResubscribe(request: TaskResubscriptionRequest): SseEmitter {
+    fun handleTaskResubscribe(request: SubscribeToTaskRequest): SseEmitter {
         val params = request.params
         val taskId = params.id  // TaskIdParams.id contains the task identifier
         val streamId = request.id?.toString() ?: UUID.randomUUID().toString()
@@ -263,7 +259,7 @@ class AutonomyA2ARequestHandler(
 
     private fun handleCancelTask(
         request: CancelTaskRequest,
-        tip: TaskIdParams,
+        ctp: CancelTaskParams,
     ): CancelTaskResponse {
         TODO()
     }
@@ -272,10 +268,10 @@ class AutonomyA2ARequestHandler(
         params: MessageSendParams,
         e: Exception,
     ): TaskStatus = TaskStatus(
-        TaskState.FAILED,
-        Message.Builder()
+        TaskState.TASK_STATE_FAILED,
+        Message.builder()
             .messageId(UUID.randomUUID().toString())
-            .role(Message.Role.AGENT)
+            .role(Message.Role.ROLE_AGENT)
             .parts(listOf(TextPart("Error: ${e.message}")))
             .contextId(params.message.contextId)
             .taskId(params.message.taskId)
@@ -287,10 +283,10 @@ class AutonomyA2ARequestHandler(
         params: MessageSendParams,
         textPart: String = "Task completed successfully",
     ): TaskStatus = TaskStatus(
-        TaskState.COMPLETED,
-        Message.Builder()
+        TaskState.TASK_STATE_COMPLETED,
+        Message.builder()
             .messageId(UUID.randomUUID().toString())
-            .role(Message.Role.AGENT)
+            .role(Message.Role.ROLE_AGENT)
             .parts(listOf(TextPart(textPart)))
             .contextId(params.message.contextId)
             .taskId(params.message.taskId)
@@ -302,10 +298,10 @@ class AutonomyA2ARequestHandler(
         params: MessageSendParams,
         textPart: String = "Working...",
     ): TaskStatus = TaskStatus(
-        TaskState.WORKING,
-        Message.Builder()
+        TaskState.TASK_STATE_WORKING,
+        Message.builder()
             .messageId(UUID.randomUUID().toString())
-            .role(Message.Role.AGENT)
+            .role(Message.Role.ROLE_AGENT)
             .parts(listOf(TextPart(textPart)))
             .contextId(params.message.contextId)
             .taskId(params.message.taskId)
@@ -328,7 +324,7 @@ class AutonomyA2ARequestHandler(
      */
     private fun extractContentForDisplay(result: AgentProcessExecution): String {
         val output = result.output
-        return if (output is com.embabel.agent.domain.library.HasContent) {
+        return if (output is HasContent) {
             output.content
         } else {
             "Task completed successfully"
@@ -341,11 +337,11 @@ class AutonomyA2ARequestHandler(
     ): Artifact {
         // TODO result should be based on the outputMode received in the "params.configuration.acceptedOutputModes"
 
-        val parts = buildList {
+        val parts = buildList<Part<*>> {
             val output = result.output
 
             // Check if output implements HasContent
-            if (output is com.embabel.agent.domain.library.HasContent) {
+            if (output is HasContent) {
                 // Extract content and add as TextPart for end-user visibility
                 add(TextPart(output.content))
 
@@ -367,7 +363,7 @@ class AutonomyA2ARequestHandler(
             }
         }
 
-        return Artifact.Builder()
+        return Artifact.builder()
             .artifactId(UUID.randomUUID().toString())
             .parts(parts)
             .build()
