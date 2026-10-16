@@ -49,6 +49,16 @@
             <artifactId>protobuf-java-util</artifactId>
         </dependency>
 
+        <!--
+            Serves A2A 0.3 clients next to A2A 1.0: the A2A 0.3 types and the SDK's
+            mappers between A2A 0.3 and A2A 1.0
+        -->
+        <dependency>
+            <groupId>org.a2aproject.sdk</groupId>
+            <artifactId>a2a-java-sdk-compat-0.3-server-conversion</artifactId>
+            <version>${a2a-java-sdk.version}</version>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-webmvc</artifactId>

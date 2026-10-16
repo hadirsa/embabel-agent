@@ -21,10 +21,12 @@ import com.embabel.agent.core.AgentPlatform
 import com.embabel.agent.core.Goal
 import com.embabel.common.core.types.Semver
 import com.embabel.common.util.indent
+import com.embabel.agent.a2a.server.A2AProtocolVersion
 import org.a2aproject.sdk.spec.AgentCapabilities
 import org.a2aproject.sdk.spec.AgentCard
 import org.a2aproject.sdk.spec.AgentInterface
 import org.a2aproject.sdk.spec.AgentProvider
+import org.a2aproject.sdk.spec.Compat03Fields
 import org.a2aproject.sdk.spec.TransportProtocol
 import org.slf4j.LoggerFactory
 
@@ -51,10 +53,14 @@ class EmbabelServerGoalsAgentCardHandler(
         port: Int,
     ): AgentCard {
         val hostingUrl = "$scheme://$host:$port/$path"
-        val agentCard = AgentCard.builder()
+        // One JSON-RPC interface per A2A version, at the same URL: the A2A-Version header picks the version
+        val interfaces = A2AProtocolVersion.entries.map {
+            AgentInterface(TransportProtocol.JSONRPC.asString(), hostingUrl, null, it.version)
+        }
+        val builder = AgentCard.builder()
             .name(agentPlatform.name)
             .description(agentPlatform.description)
-            .supportedInterfaces(listOf(AgentInterface(TransportProtocol.JSONRPC.asString(), hostingUrl)))
+            .supportedInterfaces(interfaces)
             .provider(AgentProvider("Embabel", "https://embabel.com"))
             .version(Semver.DEFAULT_VERSION)
             .documentationUrl("https://embabel.com/docs")
@@ -73,7 +79,14 @@ class EmbabelServerGoalsAgentCardHandler(
                     goals = agentPlatform.goals.filter { goalFilter.invoke(it) }.toSet(),
                 ).skills(agentPlatform.name)
             )
-            .build()
+        // The fields A2A 0.3 clients read the endpoint from, such as url
+        Compat03Fields.addCompat03FieldsIfAvailable(
+            builder,
+            interfaces.take(1),
+            hostingUrl,
+            TransportProtocol.JSONRPC.asString(),
+        )
+        val agentCard = builder.build()
         logger.info("Returning agent card: {}", agentCard)
         return agentCard
     }

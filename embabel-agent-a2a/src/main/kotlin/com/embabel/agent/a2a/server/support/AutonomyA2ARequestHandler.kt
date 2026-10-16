@@ -15,6 +15,7 @@
  */
 package com.embabel.agent.a2a.server.support
 
+import com.embabel.agent.a2a.server.A2AProtocolVersion
 import com.embabel.agent.a2a.server.A2ARequestEvent
 import com.embabel.agent.a2a.server.A2ARequestHandler
 import com.embabel.agent.a2a.server.A2AResponseEvent
@@ -57,10 +58,13 @@ class AutonomyA2ARequestHandler(
 
     private val logger = LoggerFactory.getLogger(A2ARequestHandler::class.java)
 
-    override fun handleJsonRpcStream(request: StreamingJSONRPCRequest<*>): SseEmitter {
+    override fun handleJsonRpcStream(
+        request: StreamingJSONRPCRequest<*>,
+        protocolVersion: A2AProtocolVersion,
+    ): SseEmitter {
         return when (request) {
-            is SendStreamingMessageRequest -> handleMessageStream(request)
-            is SubscribeToTaskRequest -> handleTaskResubscribe(request)
+            is SendStreamingMessageRequest -> handleMessageStream(request, protocolVersion)
+            is SubscribeToTaskRequest -> handleTaskResubscribe(request, protocolVersion)
         }
     }
 
@@ -147,13 +151,16 @@ class AutonomyA2ARequestHandler(
         }
     }
 
-    fun handleMessageStream(request: SendStreamingMessageRequest): SseEmitter {
+    fun handleMessageStream(
+        request: SendStreamingMessageRequest,
+        protocolVersion: A2AProtocolVersion = A2AProtocolVersion.V1_0,
+    ): SseEmitter {
         val params = request.params
         val streamId = request.id?.toString() ?: UUID.randomUUID().toString()
         val taskId = ensureTaskId(params.message.taskId)
         val contextId = ensureContextId(params.message.contextId)
 
-        val emitter = streamingHandler.createStream(streamId, taskId, contextId)
+        val emitter = streamingHandler.createStream(streamId, taskId, contextId, protocolVersion)
 
         Thread.startVirtualThread {
             try {
@@ -230,7 +237,10 @@ class AutonomyA2ARequestHandler(
     /**
      * Handles task resubscription requests
      */
-    fun handleTaskResubscribe(request: SubscribeToTaskRequest): SseEmitter {
+    fun handleTaskResubscribe(
+        request: SubscribeToTaskRequest,
+        protocolVersion: A2AProtocolVersion = A2AProtocolVersion.V1_0,
+    ): SseEmitter {
         val params = request.params
         val taskId = params.id  // TaskIdParams.id contains the task identifier
         val streamId = request.id?.toString() ?: UUID.randomUUID().toString()
@@ -238,7 +248,7 @@ class AutonomyA2ARequestHandler(
         logger.info("Handling task resubscribe request for taskId: {}, streamId: {}", taskId, streamId)
 
         return try {
-            streamingHandler.resubscribeToTask(taskId, streamId)
+            streamingHandler.resubscribeToTask(taskId, streamId, protocolVersion)
         } catch (e: IllegalArgumentException) {
             logger.error("Task not found: {}", taskId, e)
             val emitter = SseEmitter(Long.MAX_VALUE)

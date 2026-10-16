@@ -15,6 +15,7 @@
  */
 package com.embabel.agent.a2a.server.support
 
+import com.embabel.agent.a2a.server.A2AProtocolVersion
 import com.embabel.agent.a2a.server.AgentCardHandler
 import com.embabel.common.util.EmbabelObjectMapperHolder
 import com.google.gson.JsonSyntaxException
@@ -36,7 +37,6 @@ import org.a2aproject.sdk.jsonrpc.common.wrappers.NonStreamingJSONRPCRequest
 import org.a2aproject.sdk.jsonrpc.common.wrappers.SendMessageResponse
 import org.a2aproject.sdk.jsonrpc.common.wrappers.StreamingJSONRPCRequest
 import org.a2aproject.sdk.spec.A2AError
-import org.a2aproject.sdk.spec.AgentInterface
 import org.a2aproject.sdk.spec.InternalError
 import org.a2aproject.sdk.spec.InvalidParamsError
 import org.a2aproject.sdk.spec.InvalidRequestError
@@ -133,18 +133,42 @@ private class AgentCardHandlerWebFacade(
         return jsonResponse(JsonUtil.toJson(agentCard))
     }
 
+    private val a2a03JsonRpcHandler = A2A03JsonRpcHandler(agentCardHandler)
+
     /**
-     * Handles an A2A 1.0 JSON-RPC request. Requests and responses are read and written
-     * with the A2A Java SDK, so the wire format matches A2A 1.0 clients.
+     * Handles a JSON-RPC request in the A2A version the client asks for in the A2A-Version header:
+     * A2A 1.0, or A2A 0.3 when the header is missing.
+     * Requests and responses are read and written with the A2A Java SDK.
      * Errors are returned as JSON-RPC error responses.
      */
     @ResponseBody
     fun handleJsonRpc(
         @RequestBody body: String,
         @RequestHeader(name = A2AHeaders.A2A_VERSION, required = false) a2aVersion: String?,
-    ): Any {
+    ): Any =
+        when (A2AProtocolVersion.fromHeader(a2aVersion)) {
+            A2AProtocolVersion.V1_0 -> handleJsonRpc10(body)
+            A2AProtocolVersion.V0_3 -> when (val response = a2a03JsonRpcHandler.handle(body, requestIdOf(body))) {
+                is String -> jsonResponse(response)
+                else -> response
+            }
+
+            null -> errorResponse(
+                requestIdOf(body),
+                VersionNotSupportedError(
+                    null,
+                    "Protocol version '$a2aVersion' is not supported. " +
+                        "Supported versions: ${A2AProtocolVersion.entries.map { it.version }}",
+                    null,
+                ),
+            )
+        }
+
+    /**
+     * Handles an A2A 1.0 JSON-RPC request.
+     */
+    private fun handleJsonRpc10(body: String): Any {
         return try {
-            checkProtocolVersion(a2aVersion)
             val request = JSONRPCUtils.parseRequestBody(body, null)
             logger.info("Received JSON-RPC request: method='{}', id='{}'", request.method, request.id)
             when (request) {
@@ -172,22 +196,6 @@ private class AgentCardHandlerWebFacade(
             // Throwable, not Exception: errors such as kotlin.NotImplementedError must still get a JSON-RPC response
             logger.error("Error handling JSON-RPC request: {}", e.message, e)
             errorResponse(requestIdOf(body), InternalError("Internal server error: ${e.message}"))
-        }
-    }
-
-    /**
-     * Per A2A 1.0, a request without the A2A-Version header is an A2A 0.3 request.
-     * Any 1.x version is compatible.
-     */
-    private fun checkProtocolVersion(a2aVersion: String?) {
-        val requested = a2aVersion?.takeIf { it.isNotBlank() } ?: "0.3"
-        val supported = AgentInterface.CURRENT_PROTOCOL_VERSION
-        if (requested.substringBefore('.') != supported.substringBefore('.')) {
-            throw VersionNotSupportedError(
-                null,
-                "Protocol version '$requested' is not supported. Supported versions: [$supported]",
-                null,
-            )
         }
     }
 

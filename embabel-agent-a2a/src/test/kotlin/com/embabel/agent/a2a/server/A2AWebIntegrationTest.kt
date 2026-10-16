@@ -24,6 +24,15 @@ import com.embabel.agent.api.annotation.support.AgentMetadataReader
 import com.embabel.agent.core.AgentPlatform
 import com.embabel.common.core.types.Semver.Companion.DEFAULT_VERSION
 import org.a2aproject.sdk.common.A2AHeaders
+import org.a2aproject.sdk.compat03.json.JsonUtil_v0_3
+import org.a2aproject.sdk.compat03.spec.JSONRPCErrorResponse_v0_3
+import org.a2aproject.sdk.compat03.spec.SendMessageRequest_v0_3
+import org.a2aproject.sdk.compat03.spec.SendMessageResponse_v0_3
+import org.a2aproject.sdk.compat03.spec.SendStreamingMessageRequest_v0_3
+import org.a2aproject.sdk.compat03.spec.SendStreamingMessageResponse_v0_3
+import org.a2aproject.sdk.compat03.spec.TaskState_v0_3
+import org.a2aproject.sdk.compat03.spec.TaskStatusUpdateEvent_v0_3
+import org.a2aproject.sdk.compat03.spec.Task_v0_3
 import org.a2aproject.sdk.grpc.utils.JSONRPCUtils
 import org.a2aproject.sdk.grpc.utils.ProtoUtils
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil
@@ -52,6 +61,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -135,9 +145,15 @@ class A2AWebIntegrationTest(
 
             assertNotNull(agentCard.name())
             assertNotNull(agentCard.description())
-            val agentInterface = agentCard.supportedInterfaces().single()
-            assertEquals(TransportProtocol.JSONRPC.asString(), agentInterface.protocolBinding())
-            assertEquals(AgentInterface.CURRENT_PROTOCOL_VERSION, agentInterface.protocolVersion())
+            assertEquals(
+                listOf(AgentInterface.CURRENT_PROTOCOL_VERSION, "0.3"),
+                agentCard.supportedInterfaces().map { it.protocolVersion() },
+                "The preferred interface is A2A 1.0, then A2A 0.3",
+            )
+            val agentInterface = agentCard.supportedInterfaces().first()
+            assertTrue(agentCard.supportedInterfaces().all { it.protocolBinding() == TransportProtocol.JSONRPC.asString() })
+            assertTrue(agentCard.supportedInterfaces().all { it.url() == agentInterface.url() })
+            assertEquals(agentInterface.url(), agentCard.url(), "A2A 0.3 clients read the url field")
             assertTrue(
                 agentInterface.url().contains("localhost"),
                 "Agent interface url should expose localhost: '${agentInterface.url()}'"
@@ -256,8 +272,8 @@ class A2AWebIntegrationTest(
         }
 
         @Test
-        fun `should reject request without A2A-Version header as unsupported A2A 0_3`() {
-            val error = errorOf(postJsonRpc(sendMessageBody(), a2aVersion = null))
+        fun `should reject an unsupported A2A-Version`() {
+            val error = errorOf(postJsonRpc(sendMessageBody(), a2aVersion = "2.0"))
 
             assertEquals(A2AErrorCodes.VERSION_NOT_SUPPORTED.code(), error["code"])
         }
@@ -281,6 +297,85 @@ class A2AWebIntegrationTest(
             val error = errorOf(postJsonRpc(sendMessageBody(method = "message/send")))
 
             assertEquals(A2AErrorCodes.METHOD_NOT_FOUND.code(), error["code"])
+        }
+    }
+
+    /**
+     * A2A 0.3 clients send no A2A-Version header, or A2A-Version 0.3, and use the A2A 0.3 method names and JSON.
+     */
+    @Nested
+    inner class A2A03Tests {
+
+        private fun messageBody(method: String, id: Any = "req-03"): String =
+            embabelObjectMapperHolder.get().writeValueAsString(
+                mapOf(
+                    "jsonrpc" to "2.0",
+                    "id" to id,
+                    "method" to method,
+                    "params" to mapOf(
+                        "message" to mapOf(
+                            "kind" to "message",
+                            "messageId" to "msg-03",
+                            "role" to "user",
+                            "taskId" to "task-03",
+                            "contextId" to "ctx-03",
+                            "parts" to listOf(mapOf("kind" to "text", "text" to "Hello, agent!")),
+                        )
+                    ),
+                )
+            )
+
+        private fun assertCompletedTask(result: MvcResult) {
+            assertEquals(200, result.response.status)
+            val response = JsonUtil_v0_3.fromJson(result.response.contentAsString, SendMessageResponse_v0_3::class.java)
+            assertEquals("req-03", response.id)
+            assertNull(response.error, "Unexpected error: ${result.response.contentAsString}")
+            val task = assertIs<Task_v0_3>(response.result)
+            assertEquals("task-03", task.id())
+            assertEquals("ctx-03", task.contextId())
+            assertEquals(TaskState_v0_3.COMPLETED, task.status().state())
+            assertTrue(task.artifacts().single().parts().isNotEmpty())
+        }
+
+        @Test
+        fun `should handle message send without A2A-Version header`() {
+            assertCompletedTask(postJsonRpc(messageBody(SendMessageRequest_v0_3.METHOD), a2aVersion = null))
+        }
+
+        @Test
+        fun `should handle message send with A2A-Version 0_3`() {
+            assertCompletedTask(postJsonRpc(messageBody(SendMessageRequest_v0_3.METHOD), a2aVersion = "0.3"))
+        }
+
+        @Test
+        fun `should handle message stream`() {
+            val result = mockMvc.post("/a2a") {
+                contentType = MediaType.APPLICATION_JSON
+                content = messageBody(SendStreamingMessageRequest_v0_3.METHOD)
+            }.andExpect {
+                request { asyncStarted() }
+            }.andReturn()
+            mockMvc.perform(asyncDispatch(result))
+
+            val events = result.response.contentAsString.lines()
+                .filter { it.startsWith("data:") }
+                .map { JsonUtil_v0_3.fromJson(it.removePrefix("data:"), SendStreamingMessageResponse_v0_3::class.java) }
+
+            assertTrue(events.isNotEmpty(), "Stream should carry events")
+            assertTrue(events.all { it.error == null })
+            val last = assertIs<TaskStatusUpdateEvent_v0_3>(events.last().result)
+            assertEquals("task-03", last.taskId())
+            assertEquals(TaskState_v0_3.COMPLETED, last.status().state())
+            assertTrue(last.isFinal, "The last A2A 0.3 status update is final")
+        }
+
+        @Test
+        fun `should reject A2A 1_0 method name`() {
+            val result = postJsonRpc(messageBody(A2AMethods.SEND_MESSAGE_METHOD), a2aVersion = null)
+
+            val response = JsonUtil_v0_3.fromJson(result.response.contentAsString, JSONRPCErrorResponse_v0_3::class.java)
+            assertEquals("req-03", response.id)
+            assertEquals(A2AErrorCodes.METHOD_NOT_FOUND.code(), response.error.code)
         }
     }
 

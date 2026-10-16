@@ -40,12 +40,16 @@ interface A2ARequestHandler {
      * Override this method in implementations that support streaming responses.
      *
      * @param request The JSON-RPC request containing the method name, parameters, and request ID
+     * @param protocolVersion The A2A version the client speaks: stream events are written in it
      * @return An [SseEmitter] that will be used to send streaming events to the client
      * @throws UnsupportedOperationException if streaming is not supported by this implementation
      * @see SseEmitter
      * @see StreamingJSONRPCRequest
      */
-    fun handleJsonRpcStream(request: StreamingJSONRPCRequest<*>): SseEmitter {
+    fun handleJsonRpcStream(
+        request: StreamingJSONRPCRequest<*>,
+        protocolVersion: A2AProtocolVersion = A2AProtocolVersion.V1_0,
+    ): SseEmitter {
         throw UnsupportedOperationException("Streaming not supported by this implementation")
     }
 }
