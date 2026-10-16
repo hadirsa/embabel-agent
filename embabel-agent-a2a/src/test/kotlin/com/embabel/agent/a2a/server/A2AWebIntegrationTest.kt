@@ -218,6 +218,21 @@ class A2AWebIntegrationTest(
         }
 
         @Test
+        fun `should keep the type of a string id that looks like a number`() {
+            val body = JSONRPCUtils.toJsonRPCRequest(
+                "42",
+                A2AMethods.SEND_MESSAGE_METHOD,
+                ProtoUtils.ToProto.sendMessageRequest(MessageSendParams.builder().message(userMessage()).build()),
+            )
+
+            val response = embabelObjectMapperHolder.get()
+                .readValue(postJsonRpc(body).response.contentAsString, Map::class.java)
+
+            assertNotNull(response["result"], "Expected a result: $response")
+            assertEquals("42", response["id"])
+        }
+
+        @Test
         fun `should reject request without A2A-Version header as unsupported A2A 0_3`() {
             val error = errorOf(postJsonRpc(sendMessageBody(), a2aVersion = null))
 

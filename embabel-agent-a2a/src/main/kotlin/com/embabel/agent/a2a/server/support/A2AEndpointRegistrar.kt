@@ -149,7 +149,10 @@ private class AgentCardHandlerWebFacade(
             logger.info("Received JSON-RPC request: method='{}', id='{}'", request.method, request.id)
             when (request) {
                 is StreamingJSONRPCRequest<*> -> agentCardHandler.handleJsonRpcStream(request)
-                is NonStreamingJSONRPCRequest<*> -> jsonResponse(toJson(agentCardHandler.handleJsonRpc(request)))
+                // The SDK turns a numeric string id such as "42" into a number, so answer with the id as sent
+                is NonStreamingJSONRPCRequest<*> -> jsonResponse(
+                    toJson(agentCardHandler.handleJsonRpc(request), requestIdOf(body) ?: request.id)
+                )
             }
         } catch (e: A2AError) {
             errorResponse(requestIdOf(body), e)
@@ -188,15 +191,15 @@ private class AgentCardHandlerWebFacade(
         }
     }
 
-    private fun toJson(response: A2AResponse<*>): String {
-        response.error?.let { return JSONRPCUtils.toJsonRPCErrorResponse(response.id, it) }
+    private fun toJson(response: A2AResponse<*>, requestId: Any?): String {
+        response.error?.let { return JSONRPCUtils.toJsonRPCErrorResponse(requestId, it) }
         val result = when (response) {
             is SendMessageResponse -> ProtoUtils.ToProto.taskOrMessage(response.result)
             is GetTaskResponse -> ProtoUtils.ToProto.task(response.result)
             is CancelTaskResponse -> ProtoUtils.ToProto.task(response.result)
             else -> throw IllegalArgumentException("Unsupported response type: ${response::class.java.name}")
         }
-        return JSONRPCUtils.toJsonRPCResultResponse(response.id, result)
+        return JSONRPCUtils.toJsonRPCResultResponse(requestId, result)
     }
 
     /**
