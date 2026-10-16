@@ -233,6 +233,29 @@ class A2AWebIntegrationTest(
         }
 
         @Test
+        fun `should carry the generated task and context ids in the status message`() {
+            val message = Message.builder()
+                .role(Message.Role.ROLE_USER)
+                .parts(listOf(TextPart("Hello, agent!")))
+                .messageId("msg-123")
+                .build()
+            val body = JSONRPCUtils.toJsonRPCRequest(
+                "msg-123",
+                A2AMethods.SEND_MESSAGE_METHOD,
+                ProtoUtils.ToProto.sendMessageRequest(MessageSendParams.builder().message(message).build()),
+            )
+
+            val response = JSONRPCUtils.parseResponseBody(
+                postJsonRpc(body).response.contentAsString,
+                A2AMethods.SEND_MESSAGE_METHOD,
+            ) as SendMessageResponse
+
+            val task = assertIs<Task>(response.result)
+            assertEquals(task.id(), task.status().message()?.taskId())
+            assertEquals(task.contextId(), task.status().message()?.contextId())
+        }
+
+        @Test
         fun `should reject request without A2A-Version header as unsupported A2A 0_3`() {
             val error = errorOf(postJsonRpc(sendMessageBody(), a2aVersion = null))
 

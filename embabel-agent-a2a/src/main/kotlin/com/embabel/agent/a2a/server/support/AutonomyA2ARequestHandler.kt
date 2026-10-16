@@ -120,10 +120,12 @@ class AutonomyA2ARequestHandler(
             // Extract content for status message if output is HasContent
             val statusMessage = extractContentForDisplay(result)
 
+            val taskId = ensureTaskId(params.message.taskId)
+            val contextId = ensureContextId(params.message.contextId)
             val task = Task.builder()
-                .id(ensureTaskId(params.message.taskId))
-                .contextId(ensureContextId(params.message.contextId))
-                .status(createCompletedTaskStatus(params, statusMessage))
+                .id(taskId)
+                .contextId(contextId)
+                .status(createCompletedTaskStatus(taskId, contextId, statusMessage))
                 .history(listOfNotNull(params.message))
                 .artifacts(
                     listOf(
@@ -161,7 +163,7 @@ class AutonomyA2ARequestHandler(
                     TaskStatusUpdateEvent.builder()
                         .taskId(taskId)
                         .contextId(contextId)
-                        .status(createWorkingTaskStatus(params, "Task started..."))
+                        .status(createWorkingTaskStatus(taskId, contextId, "Task started..."))
                         .build(),
                     taskId
                 )
@@ -182,7 +184,7 @@ class AutonomyA2ARequestHandler(
                     TaskStatusUpdateEvent.builder()
                         .taskId(taskId)
                         .contextId(contextId)
-                        .status(createWorkingTaskStatus(params, "Processing task..."))
+                        .status(createWorkingTaskStatus(taskId, contextId, "Processing task..."))
                         .build(),
                     taskId
                 )
@@ -198,7 +200,7 @@ class AutonomyA2ARequestHandler(
                     TaskStatusUpdateEvent.builder()
                         .taskId(taskId)
                         .contextId(contextId)
-                        .status(createCompletedTaskStatus(params, statusMessage))
+                        .status(createCompletedTaskStatus(taskId, contextId, statusMessage))
                         .build(),
                     taskId
                 )
@@ -210,7 +212,7 @@ class AutonomyA2ARequestHandler(
                         TaskStatusUpdateEvent.builder()
                             .taskId(taskId)
                             .contextId(contextId)
-                            .status(createFailedTaskStatus(params, e))
+                            .status(createFailedTaskStatus(taskId, contextId, e))
                             .build(),
                         taskId
                     )
@@ -265,7 +267,8 @@ class AutonomyA2ARequestHandler(
     }
 
     private fun createFailedTaskStatus(
-        params: MessageSendParams,
+        taskId: String,
+        contextId: String,
         e: Exception,
     ): TaskStatus = TaskStatus(
         TaskState.TASK_STATE_FAILED,
@@ -273,14 +276,15 @@ class AutonomyA2ARequestHandler(
             .messageId(UUID.randomUUID().toString())
             .role(Message.Role.ROLE_AGENT)
             .parts(listOf(TextPart("Error: ${e.message}")))
-            .contextId(params.message.contextId)
-            .taskId(params.message.taskId)
+            .contextId(contextId)
+            .taskId(taskId)
             .build(),
         OffsetDateTime.now()
     )
 
     private fun createCompletedTaskStatus(
-        params: MessageSendParams,
+        taskId: String,
+        contextId: String,
         textPart: String = "Task completed successfully",
     ): TaskStatus = TaskStatus(
         TaskState.TASK_STATE_COMPLETED,
@@ -288,14 +292,15 @@ class AutonomyA2ARequestHandler(
             .messageId(UUID.randomUUID().toString())
             .role(Message.Role.ROLE_AGENT)
             .parts(listOf(TextPart(textPart)))
-            .contextId(params.message.contextId)
-            .taskId(params.message.taskId)
+            .contextId(contextId)
+            .taskId(taskId)
             .build(),
         OffsetDateTime.now()
     )
 
     private fun createWorkingTaskStatus(
-        params: MessageSendParams,
+        taskId: String,
+        contextId: String,
         textPart: String = "Working...",
     ): TaskStatus = TaskStatus(
         TaskState.TASK_STATE_WORKING,
@@ -303,8 +308,8 @@ class AutonomyA2ARequestHandler(
             .messageId(UUID.randomUUID().toString())
             .role(Message.Role.ROLE_AGENT)
             .parts(listOf(TextPart(textPart)))
-            .contextId(params.message.contextId)
-            .taskId(params.message.taskId)
+            .contextId(contextId)
+            .taskId(taskId)
             .build(),
         OffsetDateTime.now()
     )
